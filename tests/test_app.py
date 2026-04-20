@@ -12,6 +12,7 @@ Coverage
   invalid annotation data, invalid URL in annotation
 - 404 / 405 error handlers
 - CORS headers present on responses
+- create_app factory behaviour
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ VALID_ANNOTATION: dict[str, Any] = {
     "element_selector": "#submit-btn",
     "comment": "Change the button colour to green.",
     "html_context": '<button id="submit-btn" class="btn">Submit</button>',
+    "page_url": "https://example.com/dashboard",
 }
 
 PAGE_URL = "https://example.com/dashboard"
@@ -94,6 +96,14 @@ class TestHealthEndpoint:
 
     def test_post_health_returns_405(self, client: FlaskClient) -> None:
         response = client.post("/health")
+        assert response.status_code == 405
+
+    def test_put_health_returns_405(self, client: FlaskClient) -> None:
+        response = client.put("/health")
+        assert response.status_code == 405
+
+    def test_delete_health_returns_405(self, client: FlaskClient) -> None:
+        response = client.delete("/health")
         assert response.status_code == 405
 
 
@@ -168,7 +178,8 @@ class TestExportEndpointSuccess:
                 "annotation_id": f"uuid-{i}",
                 "element_selector": f"#el-{i}",
                 "comment": f"Instruction {i}.",
-                "html_context": f"<div id=\"el-{i}\">Content</div>",
+                "html_context": f'<div id="el-{i}">Content</div>',
+                "page_url": PAGE_URL,
             }
             for i in range(3)
         ]
@@ -212,6 +223,51 @@ class TestExportEndpointSuccess:
         payload = {"page_url": PAGE_URL, "annotations": []}
         data = post_export(client, payload).get_json()
         assert data["json_schema"]["schema_version"] == "1.0"
+
+    def test_plain_text_contains_page_url(self, client: FlaskClient) -> None:
+        payload = {"page_url": PAGE_URL, "annotations": []}
+        data = post_export(client, payload).get_json()
+        assert PAGE_URL in data["plain_text"]
+
+    def test_xml_prompt_starts_with_declaration(self, client: FlaskClient) -> None:
+        payload = {"page_url": PAGE_URL, "annotations": []}
+        data = post_export(client, payload).get_json()
+        assert data["xml_prompt"].startswith("<?xml")
+
+    def test_json_schema_annotation_count_matches(self, client: FlaskClient) -> None:
+        annotations = [
+            {
+                "element_selector": f"#el-{i}",
+                "comment": f"Do thing {i}.",
+                "page_url": PAGE_URL,
+            }
+            for i in range(4)
+        ]
+        payload = {"page_url": PAGE_URL, "annotations": annotations}
+        data = post_export(client, payload).get_json()
+        assert data["json_schema"]["annotation_count"] == 4
+        assert len(data["json_schema"]["annotations"]) == 4
+
+    def test_comment_in_plain_text(self, client: FlaskClient) -> None:
+        annotation = {
+            "element_selector": "#x",
+            "comment": "A very specific test instruction.",
+            "page_url": PAGE_URL,
+        }
+        payload = {"page_url": PAGE_URL, "annotations": [annotation]}
+        data = post_export(client, payload).get_json()
+        assert "A very specific test instruction." in data["plain_text"]
+
+    def test_http_url_accepted(self, client: FlaskClient) -> None:
+        """http:// (non-TLS) URLs like local dev servers should be accepted."""
+        annotation = {
+            "element_selector": "#root",
+            "comment": "Change colour.",
+            "page_url": "http://localhost:3000",
+        }
+        payload = {"page_url": "http://localhost:3000", "annotations": [annotation]}
+        response = post_export(client, payload)
+        assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +397,41 @@ class TestExportEndpointClientErrors:
         response = post_export(client, payload)
         assert response.content_type.startswith("application/json")
 
+    def test_null_page_url_returns_400(self, client: FlaskClient) -> None:
+        payload = {"page_url": None, "annotations": []}
+        response = post_export(client, payload)
+        assert response.status_code == 400
+
+    def test_integer_annotations_field_returns_400(self, client: FlaskClient) -> None:
+        payload = {"page_url": PAGE_URL, "annotations": 42}
+        response = post_export(client, payload)
+        assert response.status_code == 400
+
+    def test_annotation_integer_item_returns_400(self, client: FlaskClient) -> None:
+        payload = {"page_url": PAGE_URL, "annotations": [42]}
+        response = post_export(client, payload)
+        assert response.status_code == 400
+
+    def test_empty_comment_returns_400(self, client: FlaskClient) -> None:
+        bad_annotation = {
+            "element_selector": "#x",
+            "comment": "",
+            "page_url": PAGE_URL,
+        }
+        payload = {"page_url": PAGE_URL, "annotations": [bad_annotation]}
+        response = post_export(client, payload)
+        assert response.status_code == 400
+
+    def test_whitespace_comment_returns_400(self, client: FlaskClient) -> None:
+        bad_annotation = {
+            "element_selector": "#x",
+            "comment": "   ",
+            "page_url": PAGE_URL,
+        }
+        payload = {"page_url": PAGE_URL, "annotations": [bad_annotation]}
+        response = post_export(client, payload)
+        assert response.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # Error handlers
@@ -368,6 +459,11 @@ class TestErrorHandlers:
     def test_405_contains_error_key(self, client: FlaskClient) -> None:
         data = client.get("/export").get_json()
         assert "error" in data
+
+    def test_404_put_returns_json(self, client: FlaskClient) -> None:
+        response = client.put("/does-not-exist")
+        assert response.status_code == 404
+        assert response.content_type.startswith("application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +494,18 @@ class TestCorsHeaders:
         # flask-cors returns '*' or the echoed origin when credentials are not used
         assert origin_header in ("*", "chrome-extension://abc123")
 
+    def test_cors_header_present_on_400(self, client: FlaskClient) -> None:
+        """CORS headers should be present even on error responses."""
+        payload = {"page_url": "", "annotations": []}
+        response = client.post(
+            "/export",
+            data=json.dumps(payload),
+            content_type="application/json",
+            headers={"Origin": "chrome-extension://testid"},
+        )
+        assert response.status_code == 400
+        assert "Access-Control-Allow-Origin" in response.headers
+
 
 # ---------------------------------------------------------------------------
 # create_app factory
@@ -408,8 +516,6 @@ class TestCreateAppFactory:
     """Tests for the create_app factory function."""
 
     def test_returns_flask_instance(self) -> None:
-        from flask import Flask
-
         application = create_app()
         assert isinstance(application, Flask)
 
@@ -421,3 +527,32 @@ class TestCreateAppFactory:
         app_a = create_app({"TESTING": True})
         app_b = create_app({"TESTING": True})
         assert app_a is not app_b
+
+    def test_no_config_creates_app(self) -> None:
+        application = create_app()
+        assert application is not None
+
+    def test_custom_config_key_set(self) -> None:
+        application = create_app({"MY_CUSTOM_KEY": "hello"})
+        assert application.config["MY_CUSTOM_KEY"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Module-level app instance
+# ---------------------------------------------------------------------------
+
+
+class TestModuleLevelApp:
+    """Tests that the module-level ``app`` instance is correctly exported."""
+
+    def test_module_app_is_flask(self) -> None:
+        from server.app import app as module_app
+
+        assert isinstance(module_app, Flask)
+
+    def test_module_app_has_health_route(self) -> None:
+        from server.app import app as module_app
+
+        client = module_app.test_client()
+        response = client.get("/health")
+        assert response.status_code == 200

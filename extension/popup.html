@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<!--
+  popup.html – page_prompter extension popup
+
+  The popup opens when the user clicks the page_prompter toolbar icon.
+  It lists all annotations recorded on the current page, allows editing
+  and deleting individual annotations, and provides a one-click button
+  to export all annotations as a structured prompt via the local Flask
+  server.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>page_prompter</title>
+    <style>
+      /* ----------------------------------------------------------------
+         Reset & base
+         ---------------------------------------------------------------- */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --blue-50: #eff6ff;
+        --blue-100: #dbeafe;
+        --blue-500: #3b82f6;
+        --blue-600: #2563eb;
+        --blue-700: #1d4ed8;
+        --slate-50: #f8fafc;
+        --slate-100: #f1f5f9;
+        --slate-200: #e2e8f0;
+        --slate-300: #cbd5e1;
+        --slate-400: #94a3b8;
+        --slate-500: #64748b;
+        --slate-600: #475569;
+        --slate-700: #334155;
+        --slate-800: #1e293b;
+        --slate-900: #0f172a;
+        --yellow-100: #fef9c3;
+        --yellow-300: #fde047;
+        --green-500: #22c55e;
+        --green-600: #16a34a;
+        --red-400: #f87171;
+        --red-500: #ef4444;
+        --red-600: #dc2626;
+        --radius-sm: 4px;
+        --radius-md: 6px;
+        --radius-lg: 10px;
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
+      }
+
+      body {
+        width: 380px;
+        min-height: 180px;
+        max-height: 580px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          'Helvetica Neue', Arial, sans-serif;
+        font-size: 13px;
+        color: var(--slate-800);
+        background: var(--slate-50);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ----------------------------------------------------------------
+         Header
+         ---------------------------------------------------------------- */
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px 10px;
+        background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+        color: #fff;
+        flex-shrink: 0;
+      }
+
+      .header-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .header-logo {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .header-title {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .header-subtitle {
+        font-size: 10px;
+        opacity: 0.8;
+        margin-top: 1px;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* ----------------------------------------------------------------
+         Buttons (shared base)
+         ---------------------------------------------------------------- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.4;
+        padding: 5px 12px;
+        transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+        white-space: nowrap;
+      }
+
+      .btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .btn-primary {
+        background: var(--blue-500);
+        color: #fff;
+        border: 1px solid var(--blue-600);
+      }
+
+      .btn-primary:hover:not(:disabled) {
+        background: var(--blue-600);
+      }
+
+      .btn-primary:active:not(:disabled) {
+        background: var(--blue-700);
+      }
+
+      .btn-secondary {
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+      }
+
+      .btn-secondary:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.28);
+      }
+
+      .btn-danger {
+        background: transparent;
+        color: var(--red-500);
+        border: 1px solid transparent;
+        padding: 3px 6px;
+        font-size: 11px;
+      }
+
+      .btn-danger:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.08);
+        border-color: rgba(239, 68, 68, 0.25);
+      }
+
+      .btn-icon {
+        background: transparent;
+        border: none;
+        padding: 3px 6px;
+        font-size: 13px;
+        cursor: pointer;
+        color: var(--slate-400);
+        border-radius: var(--radius-sm);
+        line-height: 1;
+        transition: color 0.12s, background 0.12s;
+      }
+
+      .btn-icon:hover {
+        color: var(--slate-700);
+        background: var(--slate-200);
+      }
+
+      /* ----------------------------------------------------------------
+         Toolbar (below header)
+         ---------------------------------------------------------------- */
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 14px;
+        background: #fff;
+        border-bottom: 1px solid var(--slate-200);
+        flex-shrink: 0;
+      }
+
+      .toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .annotation-count-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        background: var(--blue-100);
+        color: var(--blue-600);
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .toolbar-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--slate-600);
+      }
+
+      /* ----------------------------------------------------------------
+         Annotation mode toggle button
+         ---------------------------------------------------------------- */
+      #btn-toggle-mode {
+        font-size: 12px;
+        padding: 5px 12px;
+      }
+
+      #btn-toggle-mode.mode-active {
+        background: var(--red-500);
+        border-color: var(--red-600);
+        color: #fff;
+      }
+
+      #btn-toggle-mode.mode-active:hover {
+        background: var(--red-600);
+      }
+
+      /* ----------------------------------------------------------------
+         Annotation list
+         ---------------------------------------------------------------- */
+      .annotation-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      /* Empty state */
+      .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 20px;
+        color: var(--slate-400);
+        text-align: center;
+        gap: 8px;
+      }
+
+      .empty-state-icon {
+        font-size: 32px;
+        line-height: 1;
+      }
+
+      .empty-state-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--slate-500);
+      }
+
+      .empty-state-hint {
+        font-size: 11px;
+        color: var(--slate-400);
+        line-height: 1.5;
+      }
+
+      /* Annotation card */
+      .annotation-card {
+        background: #fff;
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-lg);
+        padding: 10px 12px;
+        box-shadow: var(--shadow-sm);
+        position: relative;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+
+      .annotation-card:hover {
+        border-color: var(--blue-500);
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+      }
+
+      .annotation-card.editing {
+        border-color: var(--blue-500);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      }
+
+      .card-selector {
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo,
+          monospace;
+        font-size: 10px;
+        color: var(--slate-500);
+        background: var(--slate-100);
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-sm);
+        padding: 3px 7px;
+        margin-bottom: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        max-width: 100%;
+      }
+
+      .card-comment {
+        font-size: 12px;
+        color: var(--slate-700);
+        line-height: 1.5;
+        word-break: break-word;
+        margin-bottom: 8px;
+      }
+
+      /* Edit mode: textarea inside card */
+      .card-edit-textarea {
+        width: 100%;
+        border: 1px solid var(--slate-300);
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--slate-800);
+        background: #fff;
+        padding: 6px 8px;
+        resize: vertical;
+        min-height: 64px;
+        line-height: 1.5;
+        margin-bottom: 8px;
+        transition: border-color 0.15s;
+        outline: none;
+      }
+
+      .card-edit-textarea:focus {
+        border-color: var(--blue-500);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+      }
+
+      .card-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+      }
+
+      .card-edit-actions {
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+
+      .btn-edit-save {
+        background: var(--blue-500);
+        color: #fff;
+        border: 1px solid var(--blue-600);
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 12px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+
+      .btn-edit-save:hover {
+        background: var(--blue-600);
+      }
+
+      .btn-edit-cancel {
+        background: var(--slate-100);
+        color: var(--slate-600);
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 4px 10px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+
+      .btn-edit-cancel:hover {
+        background: var(--slate-200);
+      }
+
+      /* Card index badge */
+      .card-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--blue-100);
+        color: var(--blue-600);
+        font-size: 10px;
+        font-weight: 700;
+        flex-shrink: 0;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
+      /* ----------------------------------------------------------------
+         Export section / footer
+         ---------------------------------------------------------------- */
+      .footer {
+        border-top: 1px solid var(--slate-200);
+        background: #fff;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .footer-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      #btn-export {
+        flex: 1;
+        justify-content: center;
+        font-size: 13px;
+        padding: 7px 16px;
+      }
+
+      #btn-clear {
+        background: var(--slate-100);
+        color: var(--slate-600);
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 7px 12px;
+        cursor: pointer;
+        transition: background 0.15s;
+        white-space: nowrap;
+      }
+
+      #btn-clear:hover:not(:disabled) {
+        background: var(--slate-200);
+        color: var(--slate-700);
+      }
+
+      #btn-clear:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* ----------------------------------------------------------------
+         Status / notification bar
+         ---------------------------------------------------------------- */
+      .status-bar {
+        font-size: 11px;
+        border-radius: var(--radius-md);
+        padding: 5px 10px;
+        display: none;
+        line-height: 1.4;
+        font-weight: 500;
+      }
+
+      .status-bar.visible {
+        display: block;
+      }
+
+      .status-bar.success {
+        background: #dcfce7;
+        color: #15803d;
+        border: 1px solid #bbf7d0;
+      }
+
+      .status-bar.error {
+        background: #fee2e2;
+        color: var(--red-600);
+        border: 1px solid #fecaca;
+      }
+
+      .status-bar.info {
+        background: var(--blue-50);
+        color: var(--blue-600);
+        border: 1px solid var(--blue-100);
+      }
+
+      /* ----------------------------------------------------------------
+         Export result tabs
+         ---------------------------------------------------------------- */
+      .export-panel {
+        display: none;
+        flex-direction: column;
+        gap: 0;
+        flex-shrink: 0;
+      }
+
+      .export-panel.visible {
+        display: flex;
+      }
+
+      .export-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--slate-200);
+        background: var(--slate-50);
+        padding: 0 14px;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+
+      .export-tab {
+        padding: 6px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--slate-500);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        background: none;
+        border-top: none;
+        border-left: none;
+        border-right: none;
+        font-family: inherit;
+        transition: color 0.15s, border-color 0.15s;
+        white-space: nowrap;
+      }
+
+      .export-tab.active {
+        color: var(--blue-600);
+        border-bottom-color: var(--blue-500);
+      }
+
+      .export-tab:hover:not(.active) {
+        color: var(--slate-700);
+      }
+
+      .export-content {
+        padding: 10px 14px;
+        background: #fff;
+        border-bottom: 1px solid var(--slate-200);
+      }
+
+      .export-textarea {
+        width: 100%;
+        height: 120px;
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo,
+          monospace;
+        font-size: 10px;
+        color: var(--slate-700);
+        background: var(--slate-50);
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-md);
+        padding: 8px;
+        resize: vertical;
+        outline: none;
+        line-height: 1.5;
+      }
+
+      .export-copy-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 6px;
+      }
+
+      .btn-copy {
+        background: var(--slate-100);
+        border: 1px solid var(--slate-200);
+        border-radius: var(--radius-md);
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--slate-600);
+        padding: 4px 12px;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .btn-copy:hover {
+        background: var(--slate-200);
+        color: var(--slate-800);
+      }
+
+      .btn-copy.copied {
+        background: #dcfce7;
+        color: #15803d;
+        border-color: #bbf7d0;
+      }
+
+      /* ----------------------------------------------------------------
+         Loading spinner
+         ---------------------------------------------------------------- */
+      .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        vertical-align: middle;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ----------------------------------------------------------------
+         Scrollbar styling (webkit)
+         ---------------------------------------------------------------- */
+      .annotation-list::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      .annotation-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .annotation-list::-webkit-scrollbar-thumb {
+        background: var(--slate-300);
+        border-radius: 2px;
+      }
+
+      .export-textarea::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      .export-textarea::-webkit-scrollbar-thumb {
+        background: var(--slate-300);
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- ================================================================
+         Header
+         ================================================================ -->
+    <header class="header">
+      <div class="header-brand">
+        <span class="header-logo" aria-hidden="true">📝</span>
+        <div>
+          <div class="header-title">page_prompter</div>
+          <div class="header-subtitle">AI Prompt Generator</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button
+          id="btn-toggle-mode"
+          class="btn btn-secondary"
+          title="Toggle annotation picking mode"
+        >
+          🎯 Annotate
+        </button>
+      </div>
+    </header>
+
+    <!-- ================================================================
+         Toolbar
+         ================================================================ -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-label">Annotations</span>
+        <span class="annotation-count-badge" id="annotation-count">0</span>
+      </div>
+    </div>
+
+    <!-- ================================================================
+         Annotation list (scrollable)
+         ================================================================ -->
+    <main class="annotation-list" id="annotation-list" aria-live="polite">
+      <div class="empty-state" id="empty-state">
+        <span class="empty-state-icon" aria-hidden="true">🗒️</span>
+        <div class="empty-state-title">No annotations yet</div>
+        <div class="empty-state-hint">
+          Click <strong>🎯 Annotate</strong> then click any element<br />
+          on the page to add an instruction.
+        </div>
+      </div>
+    </main>
+
+    <!-- ================================================================
+         Export result panel (hidden until export completes)
+         ================================================================ -->
+    <section class="export-panel" id="export-panel">
+      <div class="export-tabs" role="tablist">
+        <button
+          class="export-tab active"
+          role="tab"
+          data-target="tab-plain"
+          aria-selected="true"
+        >
+          Plain Text
+        </button>
+        <button
+          class="export-tab"
+          role="tab"
+          data-target="tab-xml"
+          aria-selected="false"
+        >
+          XML Prompt
+        </button>
+        <button
+          class="export-tab"
+          role="tab"
+          data-target="tab-json"
+          aria-selected="false"
+        >
+          JSON Schema
+        </button>
+      </div>
+
+      <div class="export-content">
+        <!-- Plain text -->
+        <div id="tab-plain">
+          <textarea
+            class="export-textarea"
+            id="export-plain-text"
+            readonly
+            aria-label="Plain text prompt"
+          ></textarea>
+          <div class="export-copy-row">
+            <button class="btn-copy" data-copy-target="export-plain-text">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+
+        <!-- XML -->
+        <div id="tab-xml" style="display: none">
+          <textarea
+            class="export-textarea"
+            id="export-xml-prompt"
+            readonly
+            aria-label="XML prompt"
+          ></textarea>
+          <div class="export-copy-row">
+            <button class="btn-copy" data-copy-target="export-xml-prompt">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+
+        <!-- JSON -->
+        <div id="tab-json" style="display: none">
+          <textarea
+            class="export-textarea"
+            id="export-json-schema"
+            readonly
+            aria-label="JSON schema"
+          ></textarea>
+          <div class="export-copy-row">
+            <button class="btn-copy" data-copy-target="export-json-schema">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================
+         Footer
+         ================================================================ -->
+    <footer class="footer">
+      <div class="status-bar" id="status-bar" role="status" aria-live="polite"></div>
+
+      <div class="footer-actions">
+        <button id="btn-clear" disabled title="Clear all annotations on this page">
+          🗑 Clear All
+        </button>
+        <button id="btn-export" class="btn btn-primary" disabled>
+          ✨ Export Prompts
+        </button>
+      </div>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
